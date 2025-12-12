@@ -136,3 +136,73 @@ export async function setLessonBillable(lessonId, billable) {
 (async function quickSmokeTest() {
   // nic nespouštím automaticky do UI, jen ať to nejde do erroru při importu
 })();
+
+export async function exportData() {
+  const { students, lessons } = await repo.exportAll();
+  return {
+    schemaVersion: 1,
+    exportedAt: nowIso(),
+    students,
+    lessons,
+  };
+}
+
+export async function importReplaceData(payload) {
+  assert(payload && typeof payload === "object", "Neplatný soubor");
+  assert(payload.schemaVersion === 1, "Neznámá verze zálohy");
+
+  const students = payload.students || [];
+  const lessons = payload.lessons || [];
+
+  // minimální sanity check
+  assert(Array.isArray(students) && Array.isArray(lessons), "Neplatná struktura dat");
+
+  await repo.importReplaceAll({ students, lessons });
+}
+
+export async function bulkInvoiceAllForStudent(studentId) {
+  assert(studentId, "studentId je povinné");
+  const lessons = await listLessonsByStudent(studentId);
+
+  const target = lessons.filter(l => l.billable && !l.invoiced);
+
+  // undo payload = původní stavy
+  const undo = {
+    type: "bulk_invoice",
+    studentId,
+    createdAt: nowIso(),
+    lessonStates: target.map(l => ({ id: l.id, invoiced: l.invoiced })),
+  };
+
+  // proveď změny
+  for (const l of target) {
+    await setLessonInvoiced(l.id, true);
+  }
+
+  return undo;
+}
+
+export async function undoBulkInvoice(undo) {
+  assert(undo?.type === "bulk_invoice", "Neplatný undo token");
+  for (const s of undo.lessonStates || []) {
+    // když hodina mezitím neexistuje, prostě přeskočíme
+    const lesson = await repo.lessons_get(s.id);
+    if (!lesson) continue;
+    await setLessonInvoiced(s.id, s.invoiced);
+  }
+}
+
+export async function deleteLesson(lessonId) {
+  assert(lessonId, "lessonId je povinné");
+  await repo.lessons_delete(lessonId);
+}
+
+export async function deleteStudent(studentId) {
+  assert(studentId, "studentId je povinné");
+
+  // nejdřív smazat hodiny (kvůli “sirotkům”)
+  await repo.lessons_deleteByStudent(studentId);
+
+  // pak smazat studenta
+  await repo.students_delete(studentId);
+}

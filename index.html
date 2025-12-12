@@ -10,11 +10,11 @@
       .sidebar { border-right: 1px solid #ddd; padding: 12px; overflow: auto; }
       .main { padding: 16px; overflow: auto; }
       .row { display: flex; gap: 8px; align-items: center; }
-      .col { display: flex; flex-direction: column; gap: 8px; }
-      .btn { padding: 8px 10px; border: 1px solid #999; background: white; cursor: pointer; border-radius: 8px; }
+      .col { display: flex; flex-direction: column; gap: 4px; }
+      .btn { padding: 8px 10px; border: 1px solid #999; background: white; cursor: pointer; border-radius: 8px;  }
       .btn.primary { border-color: #333; font-weight: 600; }
       .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-      .list { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+      .list { display: flex; flex-direction: column; gap: 6px; margin-top: 10px;  }
       .item { padding: 10px; border: 1px solid #ddd; border-radius: 10px; cursor: pointer; }
       .item.active { border-color: #333; }
       .muted { color: #666; font-size: 13px; }
@@ -27,7 +27,7 @@
       dialog { border: 1px solid #ddd; border-radius: 14px; padding: 14px; width: min(520px, 92vw); }
       dialog::backdrop { background: rgba(0,0,0,0.25); }
       label { font-size: 13px; color: #333; }
-      input[type="text"], input[type="number"], input[type="date"] { padding: 8px; border: 1px solid #ccc; border-radius: 10px; width: 100%; }
+      input[type="text"], input[type="number"], input[type="date"] { padding: 8px; border: 1px solid #ccc; border-radius: 10px; width: 60%; }
       .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
       .spacer { height: 10px; }
       .danger { color: #b00020; font-size: 13px; }
@@ -38,10 +38,26 @@
       <aside class="sidebar">
         <div class="row" style="justify-content: space-between;">
           <strong>Studenti</strong>
-          <button class="btn primary" id="btnAddStudent">+ Student</button>
+          <div class="row" style="gap:8px;">
+            <button class="btn" id="btnExport">Export</button>
+            <button class="btn" id="btnImport">Import</button>
+            <button class="btn primary" id="btnAddStudent">+ Student</button>
+          </div>
+
+          <input id="importFile" type="file" accept="application/json" style="display:none;" />
+
         </div>
         <div class="spacer"></div>
-        <input id="search" type="text" placeholder="Hledat…" />
+        <input
+          id="search"
+          type="search"
+          placeholder="Hledat…"
+          autocomplete="off"
+          autocapitalize="off"
+          autocorrect="off"
+          spellcheck="false"
+          name="tutorlog-search"
+        />
         <div class="list" id="studentList"></div>
       </aside>
 
