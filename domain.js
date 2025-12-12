@@ -104,7 +104,11 @@ export async function addLessonForStudent(studentId, form) {
 export async function listLessonsByStudent(studentId) {
   const lessons = await repo.lessons_listByStudent(studentId);
   // nejnovější nahoře
-  lessons.sort((a, b) => (b.date + b.createdAt).localeCompare(a.date + a.createdAt));
+  lessons.sort((a, b) => {
+    // nejnovější nahoře (nejstarší dolů)
+    if (a.date !== b.date) return b.date.localeCompare(a.date);
+    return (b.createdAt || "").localeCompare(a.createdAt || "");
+  });
   return lessons;
 }
 

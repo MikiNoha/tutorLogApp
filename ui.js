@@ -69,11 +69,21 @@ import {
     const flags = [
       l.occurred ? `<span class="pill ok">proběhla</span>` : `<span class="pill">neproběhla</span>`,
       l.billable ? `<span class="pill ok">účtovat</span>` : `<span class="pill">zdarma</span>`,
-      l.invoiced ? `<span class="pill ok">vyfakt.</span>` : `<span class="pill">nefakt.</span>`,
+      l.invoiced
+        ? `<span class="pill good">vyfakt.</span>`
+        : `<span class="pill bad">nefakt.</span>`,
     ].join(" ");
     return flags;
   }
   
+  function fmtDateCZ(isoDate) {
+  // isoDate: "YYYY-MM-DD"
+  if (!isoDate || typeof isoDate !== "string") return "";
+  const [y, m, d] = isoDate.split("-");
+  if (!y || !m || !d) return isoDate;
+  return `${d}. ${m}. ${y}`;
+}
+
   function todayLocalISODate() {
     const d = new Date();
     const yyyy = d.getFullYear();
@@ -192,7 +202,7 @@ import {
               state.lessons.length
                 ? state.lessons.map(l => `
                   <tr>
-                    <td>${escapeHtml(l.date)}</td>
+                    <td>${escapeHtml(fmtDateCZ(l.date))}</td>
                     <td>${escapeHtml(l.durationHours)}</td>
                     <td>${fmtLessonRow(l)}</td>
                     <td>
