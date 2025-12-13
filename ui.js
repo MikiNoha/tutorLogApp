@@ -208,7 +208,7 @@ import {
               <th>Datum</th>
               <th>Hodiny</th>
               <th>Stavy</th>
-              <th>Vyfakturováno</th>
+              <th>Faktury</th>
               <th>Účtovat</th>
               <th>Akce<th>
             </tr>
@@ -222,11 +222,11 @@ import {
                       ${(() => {
                         const d = fmtDateCZ(l.date);
                         return `
-                          <div style="line-height: 1.15;">
+                          <div class="muted" style="font-size: 12px; white-space: nowrap;">
                             <div class="muted" style="font-size: 12px;">
                               ${escapeHtml(d.dow)}
                             </div>
-                            <div>
+                            <div style="white-space: nowrap;">
                               ${escapeHtml(d.date)}
                             </div>
                           </div>
@@ -237,7 +237,7 @@ import {
                     <td>${fmtLessonRow(l)}</td>
                     <td>
                       <button class="btn" data-toggle-invoiced="${escapeHtml(l.id)}">
-                        ${l.invoiced ? "Ano" : "Ne"}
+                        ${l.invoiced ? "Zpět" : "Zaplatit"}
                       </button>
                     </td>
                     <td>
