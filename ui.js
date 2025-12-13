@@ -77,12 +77,28 @@ import {
   }
   
   function fmtDateCZ(isoDate) {
-  // isoDate: "YYYY-MM-DD"
-  if (!isoDate || typeof isoDate !== "string") return "";
-  const [y, m, d] = isoDate.split("-");
-  if (!y || !m || !d) return isoDate;
-  return `${d}. ${m}. ${y}`;
+    // isoDate: "YYYY-MM-DD"
+    if (!isoDate || typeof isoDate !== "string") {
+      return { dow: "", date: "" };
+    }
+
+    const [y, m, d] = isoDate.split("-");
+    const yyyy = Number(y);
+    const mm = Number(m);
+    const dd = Number(d);
+
+    if (!yyyy || !mm || !dd) {
+      return { dow: "", date: isoDate };
+    }
+
+    const dt = new Date(yyyy, mm - 1, dd);
+
+    return {
+      dow: dt.toLocaleDateString("cs-CZ", { weekday: "long" }),
+      date: `${String(dd).padStart(2, "0")}. ${String(mm).padStart(2, "0")}. ${yyyy}`,
+    };
 }
+
 
   function todayLocalISODate() {
     const d = new Date();
@@ -202,7 +218,21 @@ import {
               state.lessons.length
                 ? state.lessons.map(l => `
                   <tr>
-                    <td>${escapeHtml(fmtDateCZ(l.date))}</td>
+                    <td>
+                      ${(() => {
+                        const d = fmtDateCZ(l.date);
+                        return `
+                          <div style="line-height: 1.15;">
+                            <div class="muted" style="font-size: 12px;">
+                              ${escapeHtml(d.dow)}
+                            </div>
+                            <div>
+                              ${escapeHtml(d.date)}
+                            </div>
+                          </div>
+                        `;
+                      })()}
+                    </td>
                     <td>${escapeHtml(l.durationHours)}</td>
                     <td>${fmtLessonRow(l)}</td>
                     <td>
