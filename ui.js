@@ -15,10 +15,14 @@ import {
     deleteLesson,
     deleteStudent,
     archiveStudent,
-    restoreStudent
+    restoreStudent,
+    bulkInvoiceMonthForStudent,
+    undoBulkInvoiceMonth,
   } from "./domain.js";
 
   const UNDO_KEY = "tutorlog_lastUndo";
+
+  const HOURLY_RATE = 500;
 
   function saveUndo(undo) {
     localStorage.setItem(UNDO_KEY, JSON.stringify(undo));
@@ -110,6 +114,43 @@ import {
     const dd = String(d.getDate()).padStart(2, "0");
     return `${yyyy}-${mm}-${dd}`;
   }
+
+  function getMonthKeyFromDate(isoDate) {
+  // "2026-03-14" -> "2026-03"
+  if (!isoDate || typeof isoDate !== "string") return "";
+  return isoDate.slice(0, 7);
+}
+
+function fmtMonthCZ(monthKey) {
+  // "2026-03" -> "březen 2026"
+  if (!monthKey) return "";
+  const [y, m] = monthKey.split("-");
+  const dt = new Date(Number(y), Number(m) - 1, 1);
+  return dt.toLocaleDateString("cs-CZ", {
+    month: "long",
+    year: "numeric",
+  });
+}
+
+function groupLessonsByMonth(lessons) {
+  const groups = new Map();
+
+  for (const lesson of lessons) {
+    const monthKey = getMonthKeyFromDate(lesson.date);
+    if (!groups.has(monthKey)) {
+      groups.set(monthKey, []);
+    }
+    groups.get(monthKey).push(lesson);
+  }
+
+  return Array.from(groups.entries())
+    .sort((a, b) => b[0].localeCompare(a[0])) // nejnovější měsíc nahoře
+    .map(([monthKey, lessons]) => ({
+      monthKey,
+      monthLabel: fmtMonthCZ(monthKey),
+      lessons,
+    }));
+}
   
   async function refreshStudents() {
     state.students = await listStudents();
@@ -217,100 +258,151 @@ import {
     `;
   }
   
-  async function renderMain() {
-    const s = await getStudent(state.selectedStudentId);
-    if (!s) return renderMainEmpty();
-  
-    const totalNotInvoiced = state.lessons
-      .filter(l => l.billable && !l.invoiced)
-      .reduce((sum, l) => sum + Number(l.durationHours || 0), 0);
+async function renderMain() {
+  const s = await getStudent(state.selectedStudentId);
+  if (!s) return renderMainEmpty();
 
-    const undo = loadUndo();
-    const hasUndoForThisStudent =
-      undo?.type === "bulk_invoice" && undo?.studentId === s.id;
-  
-    els.main.innerHTML = `
-      <div class="card col">
-        <div class="row" style="justify-content: space-between; align-items: flex-start;">
-          <div>
-            <p class="title">${escapeHtml(s.firstName)} ${escapeHtml(s.lastName)}</p>
-            
+  const undo = loadUndo();
+  const monthGroups = groupLessonsByMonth(state.lessons);
+
+  const totalNotInvoiced = state.lessons
+    .filter(l => l.billable && !l.invoiced)
+    .reduce((sum, l) => sum + Number(l.durationHours || 0), 0);
+
+  const totalNotInvoicedAmount = totalNotInvoiced * HOURLY_RATE;
+
+  els.main.innerHTML = `
+    <div class="card col">
+      <div class="row" style="justify-content: space-between; align-items: flex-start;">
+        <div>
+          <p class="title">${escapeHtml(s.firstName)} ${escapeHtml(s.lastName)}</p>
+
           <div class="row" style="gap: 10px; margin-top: 6px;">
             <a class="btn" href="${escapeHtml(s.meetLink)}" target="_blank" rel="noreferrer">
               Otevřít Meet
             </a>
             <button class="btn primary" id="btnAddLesson">+ Hodina</button>
             <button class="btn" id="btnEditStudent">Upravit studenta</button>
-            <button class="btn" id="btnBulkInvoice">Vyfakturovat vše</button>
-            ${hasUndoForThisStudent ? `<button class="btn" id="btnUndo">Zpět</button>` : ``}
           </div>
 
           <div class="muted" style="margin-top: 8px;">
-            Nevyfakturováno (účtovat):
-            <strong>${totalNotInvoiced}</strong> h
+            Nevyfakturováno (účtovat): <strong>${totalNotInvoiced}</strong> h ·
+            <strong>${totalNotInvoicedAmount} Kč</strong>
           </div>
         </div>
       </div>
-  
-        <div>
-        <table class="table">
-          <thead>
-            <tr>
-              <th>Datum</th>
-              <th>Hodiny</th>
-              <th>Stavy</th>
-              <th>Faktury</th>
-              <th>Účtovat</th>
-              <th>Akce<th>
-            </tr>
-          </thead>
-          <tbody>
-            ${
-              state.lessons.length
-                ? state.lessons.map(l => `
-                  <tr>
-                    <td>
-                      ${(() => {
-                        const d = fmtDateCZ(l.date);
-                        return `
-                          <div class="muted" style="font-size: 12px; white-space: nowrap;">
-                            <div class="muted" style="font-size: 12px;">
-                              ${escapeHtml(d.dow)}
-                            </div>
-                            <div style="white-space: nowrap;">
-                              ${escapeHtml(d.date)}
-                            </div>
-                          </div>
-                        `;
-                      })()}
-                    </td>
-                    <td>${escapeHtml(l.durationHours)}</td>
-                    <td>${fmtLessonRow(l)}</td>
-                    <td>
-                      <button class="btn" data-toggle-invoiced="${escapeHtml(l.id)}">
-                        ${l.invoiced ? "Zpět" : "Zaplatit"}
-                      </button>
-                    </td>
-                    <td>
-                      <button class="btn" data-toggle-billable="${escapeHtml(l.id)}">
-                        ${l.billable ? "Ano" : "Ne"}
-                      </button>
-                    </td>
-                    <td>
-                      <button class="btn" data-delete-lesson="${escapeHtml(l.id)}">Smazat</button>
-                    </td>
-
-                  </tr>
-                `).join("")
-                : `<tr><td colspan="5" class="muted">Zatím žádné hodiny.</td></tr>`
-            }
-          </tbody>
-        </table>
-      </div>
     </div>
-    `;
-  
-     // --- základní handlery ---
+      ${
+        monthGroups.length
+          ? monthGroups.map(group => {
+              const monthTotalHours = group.lessons
+                .reduce((sum, l) => sum + Number(l.durationHours || 0), 0);
+
+              const monthBillableHours = group.lessons
+                .filter(l => l.billable)
+                .reduce((sum, l) => sum + Number(l.durationHours || 0), 0);
+
+              const monthTotalAmount = monthBillableHours * HOURLY_RATE;
+
+              const monthBillableNotInvoicedHours = group.lessons
+                .filter(l => l.billable && !l.invoiced)
+                .reduce((sum, l) => sum + Number(l.durationHours || 0), 0);
+
+              const hasUndoForThisMonth =
+                undo?.type === "bulk_invoice_month" &&
+                undo?.studentId === s.id &&
+                undo?.monthKey === group.monthKey;
+
+              return `
+                <div style="margin-bottom: 10px; margin-top: 48px;">
+                  <div style="font-size: 18px; font-weight: 700;">
+                    ${escapeHtml(group.monthLabel)}
+                  </div>
+
+                  <div class="muted" style="margin-top: 4px;">
+                    celkem odučeno: <strong>${monthTotalHours}</strong> h · odměna: 
+                    <strong>${monthTotalAmount} Kč</strong> · k vyfakturování: 
+                    <strong>${monthBillableNotInvoicedHours}</strong> h
+                    </span>
+                  </div>
+                </div>
+                
+                    ${
+                      hasUndoForThisMonth
+                        ? `<button class="btn" data-undo-month="${escapeHtml(group.monthKey)}" style="margin-left: 8px;">Zpět</button>`
+                        : ``
+                    }
+                  </div>
+
+                  <table class="table">
+                    <thead>
+                      <tr>
+                        <th>Datum</th>
+                        <th>Hodiny</th>
+                        <th>Stavy</th>
+                        <th>Vyfakturováno</th>
+                        <th>Účtovat</th>
+                        <th>Akce</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      ${
+                        group.lessons.map(l => `
+                          <tr>
+                            <td>
+                              ${(() => {
+                                const d = fmtDateCZ(l.date);
+                                return `
+                                  <div style="line-height: 1.15;">
+                                    <div class="muted" style="font-size: 12px; white-space: nowrap;">
+                                      ${escapeHtml(d.dow)}
+                                    </div>
+                                    <div style="white-space: nowrap;">
+                                      ${escapeHtml(d.date)}
+                                    </div>
+                                  </div>
+                                `;
+                              })()}
+                            </td>
+
+                            <td>${escapeHtml(l.durationHours)}</td>
+                            <td>${fmtLessonRow(l)}</td>
+
+                            <td>
+                              <button class="btn" data-toggle-invoiced="${escapeHtml(l.id)}">
+                                ${l.invoiced ? "Ano" : "Ne"}
+                              </button>
+                            </td>
+
+                            <td>
+                              <button class="btn" data-toggle-billable="${escapeHtml(l.id)}">
+                                ${l.billable ? "Ano" : "Ne"}
+                              </button>
+                            </td>
+
+                            <td>
+                              <button class="btn" data-delete-lesson="${escapeHtml(l.id)}">
+                                Smazat
+                              </button>
+                            </td>
+                          </tr>
+                        `).join("")
+                      }
+                    </tbody>
+                  </table>
+                </div>
+                <table>
+                  <div style="margin-top: 10px;">
+                    <button class="btn" data-invoice-month="${escapeHtml(group.monthKey)}">
+                      Vyfakturovat měsíc
+                    </button>
+              `;
+            }).join("")
+          : `<div class="muted" style="margin-top: 16px;">Zatím žádné hodiny.</div>`
+      }
+    </div>
+  `;
+
   document
     .getElementById("btnAddLesson")
     .addEventListener("click", () => openAddLessonDialog(s.id));
@@ -319,7 +411,6 @@ import {
     .getElementById("btnEditStudent")
     .addEventListener("click", () => openEditStudentDialog(s));
 
-  // --- toggle jednotlivých hodin ---
   els.main.querySelectorAll("[data-toggle-invoiced]").forEach(btn => {
     btn.addEventListener("click", async () => {
       const id = btn.getAttribute("data-toggle-invoiced");
@@ -348,38 +439,35 @@ import {
     });
   });
 
+  els.main.querySelectorAll("[data-invoice-month]").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const monthKey = btn.getAttribute("data-invoice-month");
 
-
-  // --- bulk invoice ---
-  document
-    .getElementById("btnBulkInvoice")
-    .addEventListener("click", async () => {
-      const ok1 = confirm("Označit všechny nefakturované účtované hodiny jako vyfakturované?");
+      const ok1 = confirm(`Označit všechny nefakturované účtované hodiny za ${fmtMonthCZ(monthKey)} jako vyfakturované?`);
       if (!ok1) return;
 
       const ok2 = confirm("Opravdu? Bude možné to vrátit tlačítkem Zpět.");
       if (!ok2) return;
 
-      const undoToken = await bulkInvoiceAllForStudent(s.id);
+      const undoToken = await bulkInvoiceMonthForStudent(s.id, monthKey);
       saveUndo(undoToken);
       await refreshSelectedStudent();
     });
+  });
 
-  // --- undo ---
-  const btnUndo = document.getElementById("btnUndo");
-  if (btnUndo) {
-    btnUndo.addEventListener("click", async () => {
+  els.main.querySelectorAll("[data-undo-month]").forEach(btn => {
+    btn.addEventListener("click", async () => {
       const undo = loadUndo();
       if (!undo) return;
 
-      const ok = confirm("Vrátit zpět poslední hromadné vyfakturování?");
+      const ok = confirm("Vrátit zpět poslední měsíční vyfakturování?");
       if (!ok) return;
 
-      await undoBulkInvoice(undo);
+      await undoBulkInvoiceMonth(undo);
       clearUndo();
       await refreshSelectedStudent();
     });
-  }
+  });
 }
   
   // ---------- dialogs ----------

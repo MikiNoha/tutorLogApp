@@ -93,6 +93,36 @@ export async function restoreStudent(studentId) {
   return updated;
 }
 
+export async function bulkInvoiceMonthForStudent(studentId, monthKey) {
+  assert(studentId, "studentId je povinné");
+  assert(monthKey, "monthKey je povinný");
+
+  const lessons = await listLessonsByStudent(studentId);
+
+  const target = lessons.filter(l =>
+    l.date?.startsWith(monthKey) &&
+    l.billable &&
+    !l.invoiced
+  );
+
+  const undo = {
+    type: "bulk_invoice_month",
+    studentId,
+    monthKey,
+    createdAt: nowIso(),
+    lessonStates: target.map(l => ({
+      id: l.id,
+      invoiced: l.invoiced,
+    })),
+  };
+
+  for (const l of target) {
+    await setLessonInvoiced(l.id, true);
+  }
+
+  return undo;
+}
+
 // -------- LESSONS (API pro UI) --------
 export async function addLessonForStudent(studentId, form) {
   assert(studentId, "studentId je povinné");
@@ -236,4 +266,14 @@ export async function deleteStudent(studentId) {
 
   // pak smazat studenta
   await repo.students_delete(studentId);
+}
+
+export async function undoBulkInvoiceMonth(undo) {
+  assert(undo?.type === "bulk_invoice_month", "Neplatný undo token");
+
+  for (const s of undo.lessonStates || []) {
+    const lesson = await repo.lessons_get(s.id);
+    if (!lesson) continue;
+    await setLessonInvoiced(s.id, s.invoiced);
+  }
 }
