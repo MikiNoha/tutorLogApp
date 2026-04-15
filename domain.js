@@ -33,6 +33,7 @@ export async function addStudent({ firstName, lastName, meetLink }) {
     firstName: firstName.trim(),
     lastName: lastName.trim(),
     meetLink: meetLink.trim(),
+    archiver: false,
     createdAt: nowIso(),
   };
 
@@ -64,6 +65,32 @@ export async function listStudents() {
 
 export async function getStudent(id) {
   return repo.students_get(id);
+}
+
+export async function archiveStudent(studentId) {
+  const current = await repo.students_get(studentId);
+  assert(current, "Student nenalezen");
+
+  const updated = {
+    ...current,
+    archived: true,
+  };
+
+  await repo.students_put(updated);
+  return updated;
+}
+
+export async function restoreStudent(studentId) {
+  const current = await repo.students_get(studentId);
+  assert(current, "Student nenalezen");
+
+  const updated = {
+    ...current,
+    archived: false,
+  };
+
+  await repo.students_put(updated);
+  return updated;
 }
 
 // -------- LESSONS (API pro UI) --------

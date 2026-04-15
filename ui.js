@@ -14,6 +14,8 @@ import {
     undoBulkInvoice,
     deleteLesson,
     deleteStudent,
+    archiveStudent,
+    restoreStudent
   } from "./domain.js";
 
   const UNDO_KEY = "tutorlog_lastUndo";
@@ -53,6 +55,7 @@ import {
     selectedStudentId: null,
     lessons: [],
     search: "",
+    showArchive: false,
   };
   
   // ---------- helpers ----------
@@ -129,14 +132,24 @@ import {
   
   function renderSidebar() {
     const q = state.search.trim().toLowerCase();
-    const filtered = q
-      ? state.students.filter(s =>
+
+    const activeStudents = state.students.filter(s => !s.archived);
+    const archivedStudents = state.students.filter(s => s.archived);
+
+    const filteredActive = q
+      ? activeStudents.filter(s =>
           `${s.firstName} ${s.lastName}`.toLowerCase().includes(q)
         )
-      : state.students;
-  
-    els.studentList.innerHTML = filtered.length
-      ? filtered.map(s => {
+      : activeStudents;
+
+    const filteredArchived = q
+      ? archivedStudents.filter(s =>
+          `${s.firstName} ${s.lastName}`.toLowerCase().includes(q)
+        )
+      : archivedStudents;
+
+    const activeHtml = filteredActive.length
+      ? filteredActive.map(s => {
           const active = s.id === state.selectedStudentId ? "active" : "";
           return `
             <div class="item ${active}" data-student-id="${escapeHtml(s.id)}">
@@ -145,9 +158,39 @@ import {
             </div>
           `;
         }).join("")
-      : `<div class="muted">Žádní studenti.</div>`;
-  
-    // click handlers
+      : `<div class="muted">Žádní aktivní studenti.</div>`;
+
+    const archiveToggleHtml = `
+      <div class="item" id="archiveToggle" style="margin-top: 10px; color: #666; background: #f5f5f5;">
+        <div><strong>Archiv</strong></div>
+        <div class="muted">${state.showArchive ? "Skrýt archivované studenty" : "Zobrazit archivované studenty"}</div>
+      </div>
+    `;
+
+    const archiveHtml = state.showArchive
+      ? (
+          filteredArchived.length
+            ? filteredArchived.map(s => {
+                const active = s.id === state.selectedStudentId ? "active" : "";
+                return `
+                  <div class="item ${active}" data-student-id="${escapeHtml(s.id)}" style="opacity: 0.8;">
+                    <div><strong>${escapeHtml(s.lastName)} ${escapeHtml(s.firstName)}</strong></div>
+                    <div class="muted">Archivovaný student</div>
+                  </div>
+                `;
+              }).join("")
+            : `<div class="muted" style="margin-top: 8px;">Archiv je prázdný.</div>`
+        )
+      : "";
+
+    els.studentList.innerHTML = `
+      ${activeHtml}
+      <div style="border-top: 1px solid #ddd; margin: 12px 0 0 0; padding-top: 10px;">
+        ${archiveToggleHtml}
+        ${archiveHtml}
+      </div>
+    `;
+
     els.studentList.querySelectorAll("[data-student-id]").forEach(el => {
       el.addEventListener("click", async () => {
         state.selectedStudentId = el.getAttribute("data-student-id");
@@ -155,7 +198,15 @@ import {
         await refreshSelectedStudent();
       });
     });
-  }
+
+    const archiveToggle = document.getElementById("archiveToggle");
+    if (archiveToggle) {
+      archiveToggle.addEventListener("click", () => {
+        state.showArchive = !state.showArchive;
+        renderSidebar();
+      });
+    }
+}
   
   function renderMainEmpty() {
     els.main.innerHTML = `
@@ -439,9 +490,14 @@ import {
         <div class="danger" id="studentErr" style="display:none;"></div>
   
         <div class="row" style="justify-content: space-between; margin-top: 6px;">
-          <button class="btn" type="button" id="btnDeleteStudent">Smazat studenta</button>
-
-       
+          <div class="row">
+            <button class="btn" type="button" id="btnDeleteStudent">Smazat studenta</button>
+            ${
+              student.archived
+                ? `<button class="btn" type="button" id="btnRestoreStudent">Obnovit z archivu</button>`
+                : `<button class="btn" type="button" id="btnArchiveStudent">Archivovat</button>`
+            }
+          </div>
 
           <div class="row" style="justify-content: flex-end;">
             <button class="btn" type="button" id="btnCancelStudentEdit">Zrušit</button>
@@ -481,6 +537,36 @@ import {
 
     els.dlgStudent.querySelector("#btnCancelStudentEdit")
       .addEventListener("click", () => els.dlgStudent.close());
+
+    const btnArchive = els.dlgStudent.querySelector("#btnArchiveStudent");
+      if (btnArchive) {
+        btnArchive.addEventListener("click", async () => {
+          const ok = confirm(`Přesunout studenta ${student.firstName} ${student.lastName} do archivu?`);
+          if (!ok) return;
+
+          await archiveStudent(student.id);
+          els.dlgStudent.close();
+
+          if (state.selectedStudentId === student.id) {
+            state.selectedStudentId = null;
+          }
+
+          await refreshStudents();
+        });
+      }
+
+      const btnRestore = els.dlgStudent.querySelector("#btnRestoreStudent");
+      if (btnRestore) {
+        btnRestore.addEventListener("click", async () => {
+          const ok = confirm(`Obnovit studenta ${student.firstName} ${student.lastName} z archivu?`);
+          if (!ok) return;
+
+          await restoreStudent(student.id);
+          els.dlgStudent.close();
+          state.selectedStudentId = student.id;
+          await refreshStudents();
+        });
+      }
 
     els.dlgStudent.querySelector("#btnDeleteStudent")
       .addEventListener("click", async () => {
