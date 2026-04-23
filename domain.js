@@ -277,3 +277,53 @@ export async function undoBulkInvoiceMonth(undo) {
     await setLessonInvoiced(s.id, s.invoiced);
   }
 }
+
+
+export async function addCreditTopup(studentId, hours, note = "") {
+  assert(studentId, "studentId je povinné");
+  const amountHours = Number(hours);
+  assert(Number.isFinite(amountHours) && amountHours > 0, "Počet hodin musí být > 0");
+
+  const txn = {
+    id: newId(),
+    studentId,
+    type: "topup",
+    hours: amountHours,          // kladné číslo
+    note: String(note || "").trim(),
+    relatedLessonId: null,
+    createdAt: nowIso(),
+  };
+
+  await repo.creditTransactions_add(txn);
+  return txn;
+}
+
+export async function addCreditAdjustment(studentId, hours, note = "") {
+  assert(studentId, "studentId je povinné");
+  const amountHours = Number(hours);
+  assert(Number.isFinite(amountHours) && amountHours !== 0, "Počet hodin nesmí být 0");
+
+  const txn = {
+    id: newId(),
+    studentId,
+    type: "adjustment",
+    hours: amountHours,          // může být + i -
+    note: String(note || "").trim(),
+    relatedLessonId: null,
+    createdAt: nowIso(),
+  };
+
+  await repo.creditTransactions_add(txn);
+  return txn;
+}
+
+export async function listCreditTransactionsByStudent(studentId) {
+  const txns = await repo.creditTransactions_listByStudent(studentId);
+  txns.sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
+  return txns;
+}
+
+export async function getStudentCreditBalance(studentId) {
+  const txns = await repo.creditTransactions_listByStudent(studentId);
+  return txns.reduce((sum, t) => sum + Number(t.hours || 0), 0);
+}

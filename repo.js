@@ -146,3 +146,32 @@ export async function lessons_deleteByStudent(studentId) {
   });
 }
 
+
+// ---------- Credit Transactions ----------
+export async function creditTransactions_add(txn) {
+  const db = await getDb();
+  return tx(db, "creditTransactions", "readwrite", (store) => reqToPromise(store.add(txn)));
+}
+
+export async function creditTransactions_put(txn) {
+  const db = await getDb();
+  return tx(db, "creditTransactions", "readwrite", (store) => reqToPromise(store.put(txn)));
+}
+
+export async function creditTransactions_get(id) {
+  const db = await getDb();
+  return tx(db, "creditTransactions", "readonly", (store) => reqToPromise(store.get(id)));
+}
+
+export async function creditTransactions_listByStudent(studentId) {
+  const db = await getDb();
+  return tx(db, "creditTransactions", "readonly", (store) => {
+    const index = store.index("by_studentId");
+    return reqToPromise(index.getAll(studentId));
+  });
+}
+
+export async function creditTransactions_delete(id) {
+  const db = await getDb();
+  return tx(db, "creditTransactions", "readwrite", (store) => reqToPromise(store.delete(id)));
+}
