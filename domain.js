@@ -135,13 +135,23 @@ export async function addLessonForStudent(studentId, form) {
   // UI checkbox “neproběhla, ale placená”
   const paidNoShow = Boolean(form?.paidNoShow);
 
-  // Rozšiřitelná logika:
-  // - default: proběhla a účtuje se
-  // - paidNoShow: neproběhla, ale účtuje se
-  // - bonus/free: umožníš později přes form.billable = false
+  const paymentMethod = form?.paymentMethod ?? "invoice";
+  assert(
+    paymentMethod === "invoice" || paymentMethod === "credit",
+    "Neplatná platební metoda"
+  );
+
   const occurred = paidNoShow ? false : (form?.occurred ?? true);
-  const billable = form?.billable ?? true;
-  const invoiced = form?.invoiced ?? false;
+  const billable =
+    paymentMethod === "credit"
+      ? false
+      : (form?.billable ?? true);
+  
+  const invoiced =
+    paymentMethod === "credit"
+      ? true
+      : (form?.invoiced ?? false);
+
 
   const lesson = {
     id: newId(),
@@ -152,9 +162,13 @@ export async function addLessonForStudent(studentId, form) {
     billable: Boolean(billable),
     invoiced: Boolean(invoiced),
     createdAt: nowIso(),
+    paymentMethod,
   };
 
   await repo.lessons_add(lesson);
+  if (lesson.paymentMethod === "credit") {
+    await addCreditLessonDeduction(studentId, lesson.id, lesson.durationHours);
+  }
   return lesson;
 }
 
@@ -326,4 +340,38 @@ export async function listCreditTransactionsByStudent(studentId) {
 export async function getStudentCreditBalance(studentId) {
   const txns = await repo.creditTransactions_listByStudent(studentId);
   return txns.reduce((sum, t) => sum + Number(t.hours || 0), 0);
+}
+
+export async function addCreditLessonDeduction(studentId, lessonId, hours, note = "") {
+  assert(studentId, "studentId je povinné");
+  assert(lessonId, "lessonId je povinné");
+
+  const amountHours = Number(hours);
+  assert(Number.isFinite(amountHours) && amountHours > 0, "Počet hodin musí být > 0");
+
+  const currentBalance = await getStudentCreditBalance(studentId);
+  assert(currentBalance >= amountHours, "Nedostatek kreditu");
+
+  const txn = {
+    id: newId(),
+    studentId,
+    type: "lesson_deduction",
+    hours: -amountHours,
+    note: String(note || "").trim(),
+    relatedLessonId: lessonId,
+    createdAt: nowIso(),
+  };
+
+  await repo.creditTransactions_add(txn);
+  return txn;
+}
+
+export async function resetStudentCredit(studentId, note = "VYNULOVÁNÍ") {
+  assert(studentId, "studentId je povinné");
+
+  const currentBalance = await getStudentCreditBalance(studentId);
+
+  if (currentBalance === 0) return null;
+
+  return addCreditAdjustment(studentId, -currentBalance, note);
 }

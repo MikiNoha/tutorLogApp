@@ -21,6 +21,7 @@ import {
     addCreditTopup,
     listCreditTransactionsByStudent,
     getStudentCreditBalance,
+    resetStudentCredit,
   } from "./domain.js";
 
   const UNDO_KEY = "tutorlog_lastUndo";
@@ -85,6 +86,9 @@ import {
       l.invoiced
         ? `<span class="pill good">vyfakt.</span>`
         : `<span class="pill bad">nefakt.</span>`,
+      l.paymentMethod === "credit"
+        ? `<span class="pill good">kredit</span>`
+        : `<span class="pill">faktura</span>`,
     ].join(" ");
     return flags;
   }
@@ -157,6 +161,8 @@ function groupLessonsByMonth(lessons) {
       lessons,
     }));
 }
+
+
   
   async function refreshStudents() {
     state.students = await listStudents();
@@ -302,7 +308,9 @@ function buildTimelineGroups(lessons, creditTransactions) {
     groups.get(item.monthKey).push(item);
   }
 
-  for (const txn of creditTransactions.filter(t => t.type === "topup")) {
+  for (const txn of creditTransactions.filter(t =>
+    t.type === "topup" || t.type === "lesson_deduction" || t.type === "adjustment"
+    )) {
     const item = mapCreditTxnToTimelineItem(txn);
     if (!groups.has(item.monthKey)) groups.set(item.monthKey, []);
     groups.get(item.monthKey).push(item);
@@ -356,7 +364,7 @@ async function renderMain() {
           <div class="muted" style="margin-top: 8px;">
             Nevyfakturováno (účtovat): <strong>${totalNotInvoiced}</strong> h ·
             <strong>${totalNotInvoicedAmount} Kč</strong> · 
-            Kredit: <strong>${state.creditBalance}</strong> h
+            Kredit: <strong>${state.creditBalance}</strong> 
           </div>
         </div>
       </div>
@@ -371,7 +379,11 @@ async function renderMain() {
                 .filter(l => l.billable)
                 .reduce((sum, l) => sum + Number(l.durationHours || 0), 0);
 
-              const monthTotalAmount = monthBillableHours * HOURLY_RATE;
+              const monthCreditFinancialHours = group.creditTransactions
+                .filter(t => t.type === "topup" || t.type === "adjustment")
+                .reduce((sum, t) => sum + Number(t.hours || 0), 0);
+
+              const monthTotalAmount = (monthBillableHours + monthCreditFinancialHours) * HOURLY_RATE;
 
               const monthBillableNotInvoicedHours = group.lessons
                 .filter(l => l.billable && !l.invoiced)
@@ -464,6 +476,26 @@ async function renderMain() {
                           if (item.itemType === "credit_topup") {
                             const t = item.txn;
                             const d = fmtDateCZ(t.createdAt?.slice(0, 10) || "");
+
+                            const label =
+                              t.type === "topup"
+                                ? `dobití kreditů`
+                                : t.type === "lesson_deduction"
+                                  ? `odečtení kreditů`
+                                  : `odečtení kreditů`;
+
+                            const pill =
+                              t.type === "topup"
+                                ? `<span class="pill good"></span>`
+                                : `<span class="pill bad"></span>`;
+
+                            const hoursNumber = Number(t.hours || 0);
+
+                            const hoursText =
+                              hoursNumber > 0
+                                ? `+ ${hoursNumber}`
+                                : `- ${Math.abs(hoursNumber)}`;
+
                             return `
                               <tr>
                                 <td>
@@ -477,10 +509,10 @@ async function renderMain() {
                                   </div>
                                 </td>
 
-                                <td>+ ${escapeHtml(t.hours)}</td>
+                                <td>${escapeHtml(hoursText)}</td>
                                 <td>
-                                  <span class="pill good">dobito</span>
-                                  <span style="margin-left: 8px;">Dobito ${escapeHtml(t.hours)} kreditů</span>
+                                  ${pill}
+                                  <span style="margin-left: 8px;">${escapeHtml(label)}</span>
                                   ${t.note ? `<div class="muted" style="margin-top: 4px;">${escapeHtml(t.note)}</div>` : ""}
                                 </td>
 
@@ -579,6 +611,10 @@ async function renderMain() {
   .getElementById("btnTopupCredit")
   .addEventListener("click", () => openCreditTopupDialog(s.id));
 }
+
+  
+  
+
   
   // ---------- dialogs ----------
   function openAddStudentDialog() {
@@ -695,6 +731,7 @@ async function renderMain() {
                 ? `<button class="btn" type="button" id="btnRestoreStudent">Obnovit z archivu</button>`
                 : `<button class="btn" type="button" id="btnArchiveStudent">Archivovat</button>`
             }
+            <button class="btn" type="button" id="btnResetCredit">Vynulovat kredity</button>
           </div>
 
           <div class="row" style="justify-content: flex-end;">
@@ -766,6 +803,32 @@ async function renderMain() {
         });
       }
 
+      const btnResetCredit = els.dlgStudent.querySelector("#btnResetCredit");
+        if (btnResetCredit) {
+          btnResetCredit.addEventListener("click", async () => {
+            const currentBalance = await getStudentCreditBalance(student.id);
+
+            if (currentBalance === 0) {
+              alert("Student má už teď nulový kredit.");
+              return;
+            }
+
+            const ok = confirm(
+              `Opravdu chceš vynulovat kredit studenta ${student.firstName} ${student.lastName}?\nAktuální kredit: ${currentBalance} h`
+            );
+
+            if (!ok) return;
+
+            try {
+              await resetStudentCredit(student.id);
+              els.dlgStudent.close();
+              await refreshStudents();
+            } catch (ex) {
+              alert("Vynulování kreditu selhalo: " + (ex?.message ?? String(ex)));
+            }
+          });
+        }
+
     els.dlgStudent.querySelector("#btnDeleteStudent")
       .addEventListener("click", async () => {
         const ok1 = confirm(`Opravdu smazat studenta ${student.firstName} ${student.lastName}?`);
@@ -809,6 +872,11 @@ async function renderMain() {
           <input name="paidNoShow" type="checkbox" />
           Neproběhla, ale bude zaplacená (absence)
         </label>
+
+        <label class="row" style="gap: 10px;">
+          <input name="payWithCredit" type="checkbox" />
+          Zaplatit kredity
+        </label>
   
         <div class="danger" id="lessonErr" style="display:none;"></div>
   
@@ -834,6 +902,7 @@ async function renderMain() {
           date: fd.get("date"),
           durationHours: fd.get("durationHours"),
           paidNoShow: fd.get("paidNoShow") === "on",
+          paymentMethod: fd.get("payWithCredit") === "on" ? "credit" : "invoice",
         });
         els.dlgLesson.close();
         await refreshSelectedStudent();
