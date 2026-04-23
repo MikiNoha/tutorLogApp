@@ -1,6 +1,6 @@
 // db.js
 const DB_NAME = "tutorlog";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 export function openDb() {
   return new Promise((resolve, reject) => {
@@ -21,6 +21,14 @@ export function openDb() {
         lessons.createIndex("by_studentId", "studentId", { unique: false });
         lessons.createIndex("by_date", "date", { unique: false });
         lessons.createIndex("by_invoiced", "invoiced", { unique: false });
+      }
+
+      // Credit transactions
+      if (!db.objectStoreNames.contains("creditTransactions")) {
+        const creditTransactions = db.createObjectStore("creditTransactions", { keyPath: "id" });
+        creditTransactions.createIndex("by_studentId", "studentId", { unique: false });
+        creditTransactions.createIndex("by_createdAt", "createdAt", { unique: false });
+        creditTransactions.createIndex("by_type", "type", { unique: false });
       }
     };
 
