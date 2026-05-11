@@ -349,9 +349,6 @@ export async function addCreditLessonDeduction(studentId, lessonId, hours, note 
   const amountHours = Number(hours);
   assert(Number.isFinite(amountHours) && amountHours > 0, "Počet hodin musí být > 0");
 
-  const currentBalance = await getStudentCreditBalance(studentId);
-  assert(currentBalance >= amountHours, "Nedostatek kreditu");
-
   const txn = {
     id: newId(),
     studentId,

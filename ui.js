@@ -364,7 +364,9 @@ async function renderMain() {
           <div class="muted" style="margin-top: 8px;">
             Nevyfakturováno (účtovat): <strong>${totalNotInvoiced}</strong> h ·
             <strong>${totalNotInvoicedAmount} Kč</strong> · 
-            Kredit: <strong>${state.creditBalance}</strong> 
+            Kredit: <strong style="${state.creditBalance < 0 ? "color: #b00020;" : ""}">
+                      ${state.creditBalance}
+                    </strong> 
           </div>
         </div>
       </div>
@@ -898,6 +900,26 @@ async function renderMain() {
       err.style.display = "none";
       try {
         const fd = new FormData(form);
+
+        const durationHours = Number(String(fd.get("durationHours") || "").replace(",", "."));
+        const payWithCredit = fd.get("payWithCredit") === "on";
+
+        if (payWithCredit) {
+          const currentBalance = await getStudentCreditBalance(studentId);
+          const nextBalance = currentBalance - durationHours;
+
+          if (nextBalance < 0) {
+            const ok = confirm(
+              `Student nemá dostatek kreditu.\n` +
+              `Aktuální kredit: ${currentBalance} h\n` +
+              `Po odečtení bude: ${nextBalance} h\n\n` +
+              `Opravdu pokračovat?`
+            );
+
+            if (!ok) return;
+          }
+        }
+
         await addLessonForStudent(studentId, {
           date: fd.get("date"),
           durationHours: fd.get("durationHours"),
