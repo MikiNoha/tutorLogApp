@@ -10,8 +10,6 @@ import {
     setLessonBillable,
     exportData,
     importReplaceData,
-    bulkInvoiceAllForStudent,
-    undoBulkInvoice,
     deleteLesson,
     deleteStudent,
     archiveStudent,
@@ -22,11 +20,36 @@ import {
     listCreditTransactionsByStudent,
     getStudentCreditBalance,
     resetStudentCredit,
+    DEFAULT_HOURLY_RATE,
+    getStudentHourlyRate,
+    getLessonAmountCzk,
+    getTopupAmountCzk,
   } from "./domain.js";
 
   const UNDO_KEY = "tutorlog_lastUndo";
 
-  const HOURLY_RATE = 500;
+  // Odkaz na výuku jako webová adresa; "meet.google.com/x" doplníme o https://,
+  // jiná schémata (javascript: apod.) nepustíme.
+  function lessonLinkOf(student) {
+    const link = String(student?.meetLink || "").trim();
+    if (!link) return "";
+    if (/^https?:\/\//i.test(link)) return link;
+    if (/^[a-z][a-z0-9+.-]*:/i.test(link)) return "";
+    return `https://${link}`;
+  }
+
+  function fmtCzk(amount) {
+    return `${Number(amount || 0).toLocaleString("cs-CZ")} Kč`;
+  }
+
+  // Účtované fakturační hodiny (kreditní se nikdy neúčtují – platí se dobitím).
+  function isChargedLesson(l) {
+    return l.paymentMethod !== "credit" && l.billable;
+  }
+
+  function sumLessonsCzk(lessons) {
+    return lessons.reduce((sum, l) => sum + getLessonAmountCzk(l), 0);
+  }
 
   function saveUndo(undo) {
     localStorage.setItem(UNDO_KEY, JSON.stringify(undo));
@@ -142,32 +165,12 @@ function fmtMonthCZ(monthKey) {
   });
 }
 
-function groupLessonsByMonth(lessons) {
-  const groups = new Map();
-
-  for (const lesson of lessons) {
-    const monthKey = getMonthKeyFromDate(lesson.date);
-    if (!groups.has(monthKey)) {
-      groups.set(monthKey, []);
-    }
-    groups.get(monthKey).push(lesson);
-  }
-
-  return Array.from(groups.entries())
-    .sort((a, b) => b[0].localeCompare(a[0])) // nejnovější měsíc nahoře
-    .map(([monthKey, lessons]) => ({
-      monthKey,
-      monthLabel: fmtMonthCZ(monthKey),
-      lessons,
-    }));
-}
-
-
-  
   async function refreshStudents() {
     state.students = await listStudents();
-    if (!state.selectedStudentId && state.students.length) {
-      state.selectedStudentId = state.students[0].id;
+    // Když vybraný student neexistuje (start, smazání, import), vyber prvního aktivního.
+    const selectedExists = state.students.some(s => s.id === state.selectedStudentId);
+    if (!selectedExists) {
+      state.selectedStudentId = state.students.find(s => !s.archived)?.id ?? null;
     }
     renderSidebar();
     await refreshSelectedStudent();
@@ -213,14 +216,14 @@ function groupLessonsByMonth(lessons) {
           return `
             <div class="item ${active}" data-student-id="${escapeHtml(s.id)}">
               <div><strong>${escapeHtml(s.lastName)} ${escapeHtml(s.firstName)}</strong></div>
-              <div class="muted">Online • Meet link uložen</div>
+              <div class="muted">${lessonLinkOf(s) ? "Odkaz na výuku uložen" : "Bez odkazu na výuku"}</div>
             </div>
           `;
         }).join("")
       : `<div class="muted">Žádní aktivní studenti.</div>`;
 
     const archiveToggleHtml = `
-      <div class="item" id="archiveToggle" style="margin-top: 10px; color: #666; background: #f5f5f5;">
+      <div class="item" id="archiveToggle" style="margin-top: 10px; background: transparent; border-style: dashed;">
         <div><strong>Archiv</strong></div>
         <div class="muted">${state.showArchive ? "Skrýt archivované studenty" : "Zobrazit archivované studenty"}</div>
       </div>
@@ -244,7 +247,7 @@ function groupLessonsByMonth(lessons) {
 
     els.studentList.innerHTML = `
       ${activeHtml}
-      <div style="border-top: 1px solid #ddd; margin: 12px 0 0 0; padding-top: 10px;">
+      <div style="border-top: 1px solid var(--rule); margin: 12px 0 0 0; padding-top: 10px;">
         ${archiveToggleHtml}
         ${archiveHtml}
       </div>
@@ -292,7 +295,7 @@ function mapLessonToTimelineItem(lesson) {
 
 function mapCreditTxnToTimelineItem(txn) {
   return {
-    itemType: "credit_topup",
+    itemType: "credit_txn",
     sortDate: txn.createdAt?.slice(0, 10) || "",
     monthKey: getMonthKeyFromDateTime(txn.createdAt),
     txn,
@@ -329,7 +332,7 @@ function buildTimelineGroups(lessons, creditTransactions) {
         return bKey.localeCompare(aKey);
       }),
       lessons: items.filter(i => i.itemType === "lesson").map(i => i.lesson),
-      creditTransactions: items.filter(i => i.itemType === "credit_topup").map(i => i.txn),
+      creditTransactions: items.filter(i => i.itemType === "credit_txn").map(i => i.txn),
     }));
 }
   
@@ -340,11 +343,10 @@ async function renderMain() {
   const undo = loadUndo();
   const monthGroups = buildTimelineGroups(state.lessons, state.creditTransactions);
 
-  const totalNotInvoiced = state.lessons
-    .filter(l => l.billable && !l.invoiced)
+  const notInvoicedLessons = state.lessons.filter(l => isChargedLesson(l) && !l.invoiced);
+  const totalNotInvoiced = notInvoicedLessons
     .reduce((sum, l) => sum + Number(l.durationHours || 0), 0);
-
-  const totalNotInvoicedAmount = totalNotInvoiced * HOURLY_RATE;
+  const totalNotInvoicedAmount = sumLessonsCzk(notInvoicedLessons);
 
   els.main.innerHTML = `
     <div class="card col">
@@ -353,9 +355,11 @@ async function renderMain() {
           <p class="title">${escapeHtml(s.firstName)} ${escapeHtml(s.lastName)}</p>
 
           <div class="row" style="gap: 10px; margin-top: 6px;">
-            <a class="btn" href="${escapeHtml(s.meetLink)}" target="_blank" rel="noreferrer">
-              Otevřít Meet
-            </a>
+            ${
+              lessonLinkOf(s)
+                ? `<a class="btn" href="${escapeHtml(lessonLinkOf(s))}" target="_blank" rel="noreferrer">Otevřít výuku</a>`
+                : ``
+            }
             <button class="btn primary" id="btnAddLesson">+ Hodina</button>
             <button class="btn" id="btnEditStudent">Upravit studenta</button>
             <button class="btn" id="btnTopupCredit">Dobít kredit</button>
@@ -363,10 +367,11 @@ async function renderMain() {
 
           <div class="muted" style="margin-top: 8px;">
             Nevyfakturováno (účtovat): <strong>${totalNotInvoiced}</strong> h ·
-            <strong>${totalNotInvoicedAmount} Kč</strong> · 
-            Kredit: <strong style="${state.creditBalance < 0 ? "color: #b00020;" : ""}">
-                      ${state.creditBalance}
-                    </strong> 
+            <strong>${fmtCzk(totalNotInvoicedAmount)}</strong> ·
+            Kredit: <strong style="${state.creditBalance < 0 ? "color: var(--bad);" : ""}">
+                      ${state.creditBalance} h
+                    </strong> ·
+            Sazba: <strong>${fmtCzk(getStudentHourlyRate(s))}</strong>/h
           </div>
         </div>
       </div>
@@ -377,18 +382,17 @@ async function renderMain() {
               const monthTotalHours = group.lessons
                 .reduce((sum, l) => sum + Number(l.durationHours || 0), 0);
 
-              const monthBillableHours = group.lessons
-                .filter(l => l.billable)
-                .reduce((sum, l) => sum + Number(l.durationHours || 0), 0);
+              // Odměna = přijaté peníze: účtované fakturační hodiny + dobití kreditu.
+              // Úpravy kreditu (např. vynulování) nejsou platba, do odměny nepatří.
+              const monthTopupAmount = group.creditTransactions
+                .filter(t => t.type === "topup")
+                .reduce((sum, t) => sum + getTopupAmountCzk(t), 0);
 
-              const monthCreditFinancialHours = group.creditTransactions
-                .filter(t => t.type === "topup" || t.type === "adjustment")
-                .reduce((sum, t) => sum + Number(t.hours || 0), 0);
-
-              const monthTotalAmount = (monthBillableHours + monthCreditFinancialHours) * HOURLY_RATE;
+              const monthTotalAmount =
+                sumLessonsCzk(group.lessons.filter(isChargedLesson)) + monthTopupAmount;
 
               const monthBillableNotInvoicedHours = group.lessons
-                .filter(l => l.billable && !l.invoiced)
+                .filter(l => isChargedLesson(l) && !l.invoiced)
                 .reduce((sum, l) => sum + Number(l.durationHours || 0), 0);
 
               const hasUndoForThisMonth =
@@ -397,22 +401,21 @@ async function renderMain() {
                 undo?.monthKey === group.monthKey;
 
               return `
-                <div style="margin-bottom: 10px; margin-top: 48px;">
-                  <div style="font-size: 18px; font-weight: 700;">
-                    ${escapeHtml(group.monthLabel)}
-                  </div>
-
-                  <div class="muted" style="margin-top: 4px;">
-                    celkem odučeno: <strong>${monthTotalHours}</strong> h · odměna: 
-                    <strong>${monthTotalAmount} Kč</strong> · k vyfakturování: 
-                    <strong>${monthBillableNotInvoicedHours}</strong> h
-                    </span>
-                  </div>
-                </div>
-                
+                <section style="margin-top: 48px;">
+                  <div class="row" style="margin-bottom: 10px; justify-content: space-between; align-items: flex-end;">
+                    <div>
+                      <div style="font-size: 18px; font-weight: 700;">
+                        ${escapeHtml(group.monthLabel)}
+                      </div>
+                      <div class="muted" style="margin-top: 4px;">
+                        celkem odučeno: <strong>${monthTotalHours}</strong> h · odměna:
+                        <strong>${fmtCzk(monthTotalAmount)}</strong> · k vyfakturování:
+                        <strong>${monthBillableNotInvoicedHours}</strong> h
+                      </div>
+                    </div>
                     ${
                       hasUndoForThisMonth
-                        ? `<button class="btn" data-undo-month="${escapeHtml(group.monthKey)}" style="margin-left: 8px;">Zpět</button>`
+                        ? `<button class="btn" data-undo-month="${escapeHtml(group.monthKey)}">Zpět</button>`
                         : ``
                     }
                   </div>
@@ -454,17 +457,23 @@ async function renderMain() {
                                 <td>${escapeHtml(l.durationHours)}</td>
                                 <td>${fmtLessonRow(l)}</td>
 
-                                <td>
-                                  <button class="btn" data-toggle-invoiced="${escapeHtml(l.id)}">
-                                    ${l.invoiced ? "Ano" : "Ne"}
-                                  </button>
-                                </td>
+                                ${
+                                  l.paymentMethod === "credit"
+                                    ? `<td class="muted">—</td><td class="muted">—</td>`
+                                    : `
+                                      <td>
+                                        <button class="btn" data-toggle-invoiced="${escapeHtml(l.id)}">
+                                          ${l.invoiced ? "Ano" : "Ne"}
+                                        </button>
+                                      </td>
 
-                                <td>
-                                  <button class="btn" data-toggle-billable="${escapeHtml(l.id)}">
-                                    ${l.billable ? "Ano" : "Ne"}
-                                  </button>
-                                </td>
+                                      <td>
+                                        <button class="btn" data-toggle-billable="${escapeHtml(l.id)}">
+                                          ${l.billable ? "Ano" : "Ne"}
+                                        </button>
+                                      </td>
+                                    `
+                                }
 
                                 <td>
                                   <button class="btn" data-delete-lesson="${escapeHtml(l.id)}">
@@ -475,23 +484,24 @@ async function renderMain() {
                             `;
                           }
 
-                          if (item.itemType === "credit_topup") {
+                          if (item.itemType === "credit_txn") {
                             const t = item.txn;
                             const d = fmtDateCZ(t.createdAt?.slice(0, 10) || "");
+                            const hoursNumber = Number(t.hours || 0);
 
                             const label =
                               t.type === "topup"
                                 ? `dobití kreditů`
                                 : t.type === "lesson_deduction"
                                   ? `odečtení kreditů`
-                                  : `odečtení kreditů`;
+                                  : hoursNumber > 0
+                                    ? `úprava kreditů (připsání)`
+                                    : `úprava kreditů (odečtení)`;
 
                             const pill =
-                              t.type === "topup"
+                              hoursNumber > 0
                                 ? `<span class="pill good"></span>`
                                 : `<span class="pill bad"></span>`;
-
-                            const hoursNumber = Number(t.hours || 0);
 
                             const hoursText =
                               hoursNumber > 0
@@ -515,6 +525,7 @@ async function renderMain() {
                                 <td>
                                   ${pill}
                                   <span style="margin-left: 8px;">${escapeHtml(label)}</span>
+                                  ${t.type === "topup" ? `<span class="muted"> · zaplaceno ${escapeHtml(fmtCzk(getTopupAmountCzk(t)))}</span>` : ""}
                                   ${t.note ? `<div class="muted" style="margin-top: 4px;">${escapeHtml(t.note)}</div>` : ""}
                                 </td>
 
@@ -530,17 +541,17 @@ async function renderMain() {
                       }
                     </tbody>
                   </table>
-                </div>
-                <table>
+
                   <div style="margin-top: 10px;">
                     <button class="btn" data-invoice-month="${escapeHtml(group.monthKey)}">
                       Vyfakturovat měsíc
                     </button>
+                  </div>
+                </section>
               `;
             }).join("")
           : `<div class="muted" style="margin-top: 16px;">Zatím žádné hodiny.</div>`
       }
-    </div>
   `;
 
   document
@@ -611,7 +622,7 @@ async function renderMain() {
 
   document
   .getElementById("btnTopupCredit")
-  .addEventListener("click", () => openCreditTopupDialog(s.id));
+  .addEventListener("click", () => openCreditTopupDialog(s));
 }
 
   
@@ -652,18 +663,22 @@ async function renderMain() {
         </div>
   
         <div class="col">
-          <label>Google Meet odkaz</label>
-          <input 
-            name="meetLink" 
-            type="text" 
-            placeholder="https://meet.google.com/..." 
+          <label>Odkaz na výuku (nepovinné)</label>
+          <input
+            name="meetLink"
+            type="text"
+            placeholder="https://meet.google.com/… / Zoom / Teams"
             autocomplete="off"
             autocapitalize="off"
             autocorrect="off"
-            spellcheck="false"
-            required />
+            spellcheck="false" />
         </div>
-  
+
+        <div class="col">
+          <label>Hodinová sazba (Kč)</label>
+          <input name="hourlyRate" type="number" step="any" min="1" value="${DEFAULT_HOURLY_RATE}" required />
+        </div>
+
         <div class="danger" id="studentErr" style="display:none;"></div>
   
         <div class="row" style="justify-content: flex-end; margin-top: 6px;">
@@ -691,6 +706,7 @@ async function renderMain() {
           firstName: fd.get("firstName"),
           lastName: fd.get("lastName"),
           meetLink: fd.get("meetLink"),
+          hourlyRate: fd.get("hourlyRate"),
         });
         state.selectedStudentId = s.id;
         els.dlgStudent.close();
@@ -719,10 +735,16 @@ async function renderMain() {
         </div>
   
         <div class="col">
-          <label>Google Meet odkaz</label>
-          <input name="meetLink" type="text" value="${escapeHtml(student.meetLink)}" required />
+          <label>Odkaz na výuku (nepovinné)</label>
+          <input name="meetLink" type="text" value="${escapeHtml(student.meetLink || "")}" />
         </div>
-  
+
+        <div class="col">
+          <label>Hodinová sazba (Kč)</label>
+          <input name="hourlyRate" type="number" step="any" min="1" value="${escapeHtml(getStudentHourlyRate(student))}" required />
+          <div class="muted">Změna platí jen pro nově zapsané hodiny.</div>
+        </div>
+
         <div class="danger" id="studentErr" style="display:none;"></div>
   
         <div class="row" style="justify-content: space-between; margin-top: 6px;">
@@ -763,6 +785,7 @@ async function renderMain() {
           firstName: String(fd.get("firstName") || "").trim(),
           lastName: String(fd.get("lastName") || "").trim(),
           meetLink: String(fd.get("meetLink") || "").trim(),
+          hourlyRate: fd.get("hourlyRate"),
         });
         els.dlgStudent.close();
         await refreshStudents();
@@ -771,9 +794,6 @@ async function renderMain() {
         err.style.display = "block";
       }
     });
-
-    els.dlgStudent.querySelector("#btnCancelStudentEdit")
-      .addEventListener("click", () => els.dlgStudent.close());
 
     const btnArchive = els.dlgStudent.querySelector("#btnArchiveStudent");
       if (btnArchive) {
@@ -836,7 +856,7 @@ async function renderMain() {
         const ok1 = confirm(`Opravdu smazat studenta ${student.firstName} ${student.lastName}?`);
         if (!ok1) return;
 
-        const ok2 = confirm("Smažou se i všechny jeho hodiny. Pokračovat?");
+        const ok2 = confirm("Smažou se i všechny jeho hodiny a kredity. Pokračovat?");
         if (!ok2) return;
 
         await deleteStudent(student.id);
@@ -935,7 +955,10 @@ async function renderMain() {
     });
   }
 
-  function openCreditTopupDialog(studentId) {
+  function openCreditTopupDialog(student) {
+  const studentId = student.id;
+  const rate = getStudentHourlyRate(student);
+
   els.dlgCredit.innerHTML = `
     <form method="dialog" class="col" id="formCreditTopup">
       <h3 style="margin: 0;">Dobít kredit</h3>
@@ -943,6 +966,12 @@ async function renderMain() {
       <div class="col">
         <label>Počet hodin kreditu</label>
         <input name="hours" type="number" step="0.5" min="0.5" value="1" required />
+      </div>
+
+      <div class="col">
+        <label>Zaplaceno (Kč)</label>
+        <input name="amountCzk" type="number" step="any" min="0" value="${rate}" required />
+        <div class="muted">Předvyplněno hodiny × ${escapeHtml(fmtCzk(rate))}. U balíčku se slevou přepiš.</div>
       </div>
 
       <div class="col">
@@ -967,16 +996,28 @@ async function renderMain() {
   els.dlgCredit.querySelector("#btnCancelCredit")
     .addEventListener("click", () => els.dlgCredit.close());
 
+  // Částka se dopočítává z hodin, dokud ji ručně nepřepíšu.
+  const hoursInput = form.elements.hours;
+  const amountInput = form.elements.amountCzk;
+  let amountEditedByHand = false;
+  amountInput.addEventListener("input", () => { amountEditedByHand = true; });
+  hoursInput.addEventListener("input", () => {
+    if (amountEditedByHand) return;
+    const hours = Number(String(hoursInput.value).replace(",", "."));
+    if (Number.isFinite(hours)) amountInput.value = hours * rate;
+  });
+
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     err.style.display = "none";
 
     try {
       const fd = new FormData(form);
-      const hours = Number(String(fd.get("hours") || "").replace(",", "."));
-      const note = String(fd.get("note") || "").trim();
-
-      await addCreditTopup(studentId, hours, note);
+      await addCreditTopup(studentId, {
+        hours: fd.get("hours"),
+        amountCzk: fd.get("amountCzk"),
+        note: fd.get("note"),
+      });
 
       els.dlgCredit.close();
       await refreshSelectedStudent();

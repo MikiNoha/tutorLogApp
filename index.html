@@ -4,36 +4,152 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>TutorLog MVP</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;600;700&display=swap" rel="stylesheet" />
     <style>
-      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 0; }
+      :root {
+        --paper: #f7f9fc;      /* chladná bílá sešitu */
+        --surface: #ffffff;
+        --ink: #1e3a8a;        /* školní modrý inkoust – jediný akcent */
+        --ink-soft: #e8edf8;
+        --text: #1c2333;
+        --muted: #5d6880;
+        --rule: #dce2eb;
+        --grid: #e6ebf3;       /* čtverečky v sidebaru */
+        --good: #1e7a46;
+        --good-soft: #e3f2e8;
+        --bad: #b42318;
+        --bad-soft: #fbe9e7;
+        --radius: 8px;
+      }
+
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: "Source Sans 3", system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+        font-size: 15px;
+        line-height: 1.45;
+        color: var(--text);
+        background: var(--surface);
+      }
+      :focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+
       .layout { display: grid; grid-template-columns: 320px 1fr; height: 100vh; }
-      .sidebar { border-right: 1px solid #ddd; padding: 12px; overflow: auto; }
-      .main { padding: 16px; overflow: auto; }
-      .row { display: flex; gap: 8px; align-items: center; }
+
+      /* Sidebar = list čtverečkovaného sešitu */
+      .sidebar {
+        border-right: 1px solid var(--rule);
+        padding: 16px;
+        overflow: auto;
+        background-color: var(--paper);
+        background-image:
+          linear-gradient(var(--grid) 1px, transparent 1px),
+          linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+        background-size: 16px 16px;
+      }
+      .main { padding: 24px 28px; overflow: auto; }
+
+      .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
       .col { display: flex; flex-direction: column; gap: 4px; }
-      .btn { padding: 8px 10px; border: 1px solid #999; background: white; cursor: pointer; border-radius: 8px;  }
-      .btn.primary { border-color: #333; font-weight: 600; }
+
+      .btn {
+        font: inherit;
+        font-size: 14px;
+        padding: 7px 12px;
+        border: 1px solid var(--rule);
+        background: var(--surface);
+        color: var(--text);
+        cursor: pointer;
+        border-radius: var(--radius);
+        text-decoration: none;
+        display: inline-flex;
+        align-items: center;
+      }
+      .btn:hover { border-color: var(--ink); color: var(--ink); }
+      .btn.primary { background: var(--ink); border-color: var(--ink); color: #fff; font-weight: 600; }
+      .btn.primary:hover { background: #172e70; color: #fff; }
       .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-      .list { display: flex; flex-direction: column; gap: 6px; margin-top: 10px;  }
-      .item { padding: 10px; border: 1px solid #ddd; border-radius: 10px; cursor: pointer; }
-      .item.active { border-color: #333; }
-      .muted { color: #666; font-size: 13px; }
-      .card { border: 1px solid #ddd; border-radius: 14px; padding: 14px; }
-      .title { font-size: 20px; font-weight: 700; margin: 0; }
-      .table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-      .table th, .table td { border-bottom: 1px solid #eee; padding: 8px; text-align: left; font-size: 14px; }
-      .pill { display: inline-block; padding: 2px 8px; border: 1px solid #ccc; border-radius: 999px; font-size: 12px; }
-      .pill.ok { border-color: #333; }
-      .pill.good { background-color: #1b7f3a; color: #ffffff; font-weight: bold; }
-      .pill.bad  { background-color: #b00020; color: #ffffff; font-weight: bold; }
-      dialog { border: 1px solid #ddd; border-radius: 14px; padding: 14px; width: min(520px, 92vw); }
-      dialog::backdrop { background: rgba(0,0,0,0.25); }
-      label { font-size: 13px; color: #333; }
-      input[type="text"], input[type="number"], input[type="date"] { padding: 8px; border: 1px solid #ccc; border-radius: 10px; width: 60%; }
+      .table .btn { padding: 3px 10px; font-size: 13px; }
+
+      .list { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; }
+      .item {
+        padding: 9px 12px;
+        border: 1px solid var(--rule);
+        border-radius: var(--radius);
+        background: var(--surface);
+        cursor: pointer;
+      }
+      .item:hover { border-color: #b9c3d4; }
+      .item.active { border-color: var(--ink); box-shadow: inset 3px 0 0 var(--ink); }
+
+      .muted { color: var(--muted); font-size: 13px; }
+      .card { border-bottom: 1px solid var(--rule); padding: 0 0 18px; }
+      .title { font-size: 26px; font-weight: 700; line-height: 1.15; margin: 0; letter-spacing: -0.01em; }
+
+      .table { width: 100%; border-collapse: collapse; margin-top: 8px; font-variant-numeric: tabular-nums; }
+      .table th {
+        text-align: left;
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--muted);
+        padding: 6px 8px;
+        border-bottom: 1px solid var(--rule);
+      }
+      .table td { border-bottom: 1px solid #eef1f6; padding: 8px; text-align: left; font-size: 14px; vertical-align: middle; }
+      .table tbody tr:hover { background: #fafbfd; }
+
+      .pill {
+        display: inline-block;
+        padding: 1px 8px;
+        border-radius: 999px;
+        font-size: 12px;
+        background: #eef1f6;
+        color: var(--muted);
+      }
+      .pill.ok { background: var(--ink-soft); color: var(--ink); }
+      .pill.good { background: var(--good-soft); color: var(--good); font-weight: 600; }
+      .pill.bad  { background: var(--bad-soft); color: var(--bad); font-weight: 600; }
+      /* prázdná pilulka u kreditu = barevná tečka (+ / −) */
+      .pill:empty { width: 8px; height: 8px; padding: 0; vertical-align: middle; }
+      .pill.good:empty { background: var(--good); }
+      .pill.bad:empty  { background: var(--bad); }
+
+      dialog {
+        border: 1px solid var(--rule);
+        border-radius: 12px;
+        padding: 20px;
+        width: min(520px, 92vw);
+        color: var(--text);
+        box-shadow: 0 12px 32px rgba(28, 35, 51, 0.14);
+      }
+      dialog h3 { font-size: 19px; }
+      dialog::backdrop { background: rgba(28, 35, 51, 0.3); }
+
+      label { font-size: 13px; color: var(--muted); }
+      input[type="text"], input[type="number"], input[type="date"], input[type="search"] {
+        font: inherit;
+        padding: 7px 10px;
+        border: 1px solid var(--rule);
+        border-radius: var(--radius);
+        background: var(--surface);
+        color: var(--text);
+        width: 100%;
+      }
+      input:focus-visible { outline: 2px solid var(--ink); outline-offset: 0; border-color: var(--ink); }
+      input[type="checkbox"] { accent-color: var(--ink); width: 16px; height: 16px; }
+      label.row { color: var(--text); font-size: 14px; }
+
       .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-      .spacer { height: 10px; }
-      .danger { color: #b00020; font-size: 13px; }
-      
+      .spacer { height: 12px; }
+      .danger { color: var(--bad); font-size: 13px; }
+
+      @media (max-width: 760px) {
+        .layout { grid-template-columns: 1fr; height: auto; }
+        .sidebar { border-right: 0; border-bottom: 1px solid var(--rule); max-height: 45vh; }
+        .main { padding: 16px; }
+        .table { display: block; overflow-x: auto; }
+      }
     </style>
   </head>
   <body>
