@@ -28,6 +28,7 @@ Projekt **není** primárně komerční SaaS – cílem je:
 
   * aktivní + archiv (archivovaní se schovávají, aplikace se otevře na prvním aktivním)
   * hledání podle jména
+  * u každého stav: zůstatek kreditu (červeně, když dochází / dluží) a hodiny k fakturaci
 * karta studenta:
 
   * jméno
@@ -42,6 +43,7 @@ Projekt **není** primárně komerční SaaS – cílem je:
   * účtovat / zdarma
   * vyfakturováno / nevyfakturováno
   * každá hodina si pamatuje sazbu, se kterou byla zapsána
+  * úprava zapsané hodiny (datum, délka, sazba, absence, způsob platby – odečtení kreditu se přizpůsobí)
 * kredit (předplacené hodiny):
 
   * dobití – počet hodin + skutečně zaplacená částka (balíčky se slevou)
@@ -54,6 +56,7 @@ Projekt **není** primárně komerční SaaS – cílem je:
   * souhrn: odučeno (h), odměna (Kč), k vyfakturování (h)
   * vyfakturování celého měsíce + undo
 * export / import dat (JSON backup, včetně kreditů)
+* ochrana dat: aplikace požádá prohlížeč o trvalé úložiště a připomene zálohu, když poslední je starší než 14 dní
 
 ### Technické řešení
 

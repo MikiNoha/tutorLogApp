@@ -24,9 +24,38 @@ import {
     getStudentHourlyRate,
     getLessonAmountCzk,
     getTopupAmountCzk,
+    isChargedLesson,
+    updateLesson,
+    getStudentSummaries,
+    LOW_CREDIT_HOURS,
   } from "./domain.js";
 
   const UNDO_KEY = "tutorlog_lastUndo";
+  const LAST_EXPORT_KEY = "tutorlog_lastExportAt";
+  const BACKUP_REMIND_DAYS = 14;
+
+  // Kolik dní uplynulo od posledního exportu; null = ještě nikdy.
+  function daysSinceLastExport() {
+    try {
+      const raw = localStorage.getItem(LAST_EXPORT_KEY);
+      if (!raw) return null;
+      return Math.floor((Date.now() - new Date(raw).getTime()) / 86_400_000);
+    } catch {
+      return null;
+    }
+  }
+
+  function rememberExport() {
+    try {
+      localStorage.setItem(LAST_EXPORT_KEY, new Date().toISOString());
+    } catch {
+      // bez localStorage jen nebude fungovat připomínka
+    }
+  }
+
+  function fmtHours(hours) {
+    return `${Number(hours || 0).toLocaleString("cs-CZ")} h`;
+  }
 
   // Odkaz na výuku jako webová adresa; "meet.google.com/x" doplníme o https://,
   // jiná schémata (javascript: apod.) nepustíme.
@@ -40,11 +69,6 @@ import {
 
   function fmtCzk(amount) {
     return `${Number(amount || 0).toLocaleString("cs-CZ")} Kč`;
-  }
-
-  // Účtované fakturační hodiny (kreditní se nikdy neúčtují – platí se dobitím).
-  function isChargedLesson(l) {
-    return l.paymentMethod !== "credit" && l.billable;
   }
 
   function sumLessonsCzk(lessons) {
@@ -80,6 +104,7 @@ import {
     btnImport: document.getElementById("btnImport"),
     importFile: document.getElementById("importFile"),
     dlgCredit: document.getElementById("dlgCredit"),
+    backupNotice: document.getElementById("backupNotice"),
   };
   
   let state = {
@@ -88,6 +113,7 @@ import {
     lessons: [],
     search: "",
     showArchive: false,
+    summaries: new Map(), // studentId -> { creditBalance, usesCredit, notInvoicedHours }
     creditTransactions: [],
     creditBalance: 0,
   };
@@ -103,8 +129,17 @@ import {
   }
   
   function fmtLessonRow(l) {
+    const occurredPill = l.occurred
+      ? `<span class="pill ok">proběhla</span>`
+      : `<span class="pill">neproběhla</span>`;
+
+    // Kreditní hodina se neúčtuje ani nefakturuje – je zaplacená dobitím.
+    if (l.paymentMethod === "credit") {
+      return `${occurredPill} <span class="pill good">kredit</span>`;
+    }
+
     const flags = [
-      l.occurred ? `<span class="pill ok">proběhla</span>` : `<span class="pill">neproběhla</span>`,
+      occurredPill,
       l.billable ? `<span class="pill ok">účtovat</span>` : `<span class="pill">zdarma</span>`,
       l.invoiced
         ? `<span class="pill good">vyfakt.</span>`
@@ -172,11 +207,15 @@ function fmtMonthCZ(monthKey) {
     if (!selectedExists) {
       state.selectedStudentId = state.students.find(s => !s.archived)?.id ?? null;
     }
-    renderSidebar();
     await refreshSelectedStudent();
   }
-  
+
+  // Po každé změně dat: přepočítat stavy v sidebaru a překreslit vybraného studenta.
   async function refreshSelectedStudent() {
+    state.summaries = await getStudentSummaries();
+    renderSidebar();
+    renderBackupNotice();
+
     if (!state.selectedStudentId) {
       state.lessons = [];
       state.creditTransactions = [];
@@ -192,6 +231,45 @@ function fmtMonthCZ(monthKey) {
     renderMain();
   }
   
+  // Jednořádkový stav studenta: kredit (když ho používá) a hodiny k fakturaci.
+  function studentStatusHtml(student) {
+    const sum = state.summaries.get(student.id);
+    const parts = [];
+
+    if (sum?.usesCredit) {
+      const balance = sum.creditBalance;
+      const note = balance < 0 ? " (dluží)" : balance <= LOW_CREDIT_HOURS ? " (dochází)" : "";
+      const cls = note ? ` class="warn"` : "";
+      parts.push(`<span${cls}>kredit ${escapeHtml(fmtHours(balance))}${note}</span>`);
+    }
+    if (sum?.notInvoicedHours > 0) {
+      parts.push(`k fakturaci ${escapeHtml(fmtHours(sum.notInvoicedHours))}`);
+    }
+    return parts.length ? parts.join(" · ") : "vše vyfakturováno";
+  }
+
+  function renderBackupNotice() {
+    const days = daysSinceLastExport();
+    const due = state.students.length > 0 && (days === null || days >= BACKUP_REMIND_DAYS);
+
+    if (!due) {
+      els.backupNotice.innerHTML = "";
+      return;
+    }
+
+    els.backupNotice.innerHTML = `
+      <div class="notice">
+        <div>${
+          days === null
+            ? "Data jsou jen v tomto prohlížeči a zatím nemají zálohu."
+            : `Poslední záloha před ${days} dny.`
+        }</div>
+        <button class="btn" type="button" id="btnBackupNow">Zálohovat teď</button>
+      </div>
+    `;
+    document.getElementById("btnBackupNow").addEventListener("click", exportBackup);
+  }
+
   function renderSidebar() {
     const q = state.search.trim().toLowerCase();
 
@@ -216,7 +294,7 @@ function fmtMonthCZ(monthKey) {
           return `
             <div class="item ${active}" data-student-id="${escapeHtml(s.id)}">
               <div><strong>${escapeHtml(s.lastName)} ${escapeHtml(s.firstName)}</strong></div>
-              <div class="muted">${lessonLinkOf(s) ? "Odkaz na výuku uložen" : "Bez odkazu na výuku"}</div>
+              <div class="muted">${studentStatusHtml(s)}</div>
             </div>
           `;
         }).join("")
@@ -476,9 +554,10 @@ async function renderMain() {
                                 }
 
                                 <td>
-                                  <button class="btn" data-delete-lesson="${escapeHtml(l.id)}">
-                                    Smazat
-                                  </button>
+                                  <div class="row" style="flex-wrap: nowrap; gap: 6px;">
+                                    <button class="btn" data-edit-lesson="${escapeHtml(l.id)}">Upravit</button>
+                                    <button class="btn" data-delete-lesson="${escapeHtml(l.id)}">Smazat</button>
+                                  </div>
                                 </td>
                               </tr>
                             `;
@@ -556,7 +635,7 @@ async function renderMain() {
 
   document
     .getElementById("btnAddLesson")
-    .addEventListener("click", () => openAddLessonDialog(s.id));
+    .addEventListener("click", () => openLessonDialog(s.id));
 
   document
     .getElementById("btnEditStudent")
@@ -577,6 +656,13 @@ async function renderMain() {
       if (!lesson) return;
       await setLessonBillable(id, !lesson.billable);
       await refreshSelectedStudent();
+    });
+  });
+
+  els.main.querySelectorAll("[data-edit-lesson]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const lesson = state.lessons.find(x => x.id === btn.getAttribute("data-edit-lesson"));
+      if (lesson) openLessonDialog(s.id, lesson);
     });
   });
 
@@ -874,32 +960,52 @@ async function renderMain() {
 
   }
   
-  function openAddLessonDialog(studentId) {
+  // Bez `lesson` = nová hodina, s `lesson` = oprava existující.
+  function openLessonDialog(studentId, lesson = null) {
+    const isEdit = Boolean(lesson);
+    const checked = (cond) => (cond ? "checked" : "");
+
     els.dlgLesson.innerHTML = `
       <form method="dialog" class="col" id="formLesson">
-        <h3 style="margin: 0;">Přidat hodinu</h3>
-  
+        <h3 style="margin: 0;">${isEdit ? "Upravit hodinu" : "Přidat hodinu"}</h3>
+
         <div class="grid2">
           <div class="col">
             <label>Datum</label>
-            <input name="date" type="date" value="${todayLocalISODate()}" required />
+            <input name="date" type="date" value="${escapeHtml(lesson?.date ?? todayLocalISODate())}" required />
           </div>
           <div class="col">
             <label>Počet hodin</label>
-            <input name="durationHours" type="number" step="0.5" min="0.5" value="1" required />
+            <input name="durationHours" type="number" step="0.5" min="0.5" value="${escapeHtml(lesson?.durationHours ?? 1)}" required />
           </div>
         </div>
-  
+
+        ${
+          isEdit
+            ? `
+              <div class="col">
+                <label>Sazba této hodiny (Kč/h)</label>
+                <input name="hourlyRate" type="number" step="any" min="1" value="${escapeHtml(lesson.hourlyRate ?? DEFAULT_HOURLY_RATE)}" required />
+              </div>`
+            : ""
+        }
+
         <label class="row" style="gap: 10px;">
-          <input name="paidNoShow" type="checkbox" />
+          <input name="paidNoShow" type="checkbox" ${checked(isEdit && !lesson.occurred)} />
           Neproběhla, ale bude zaplacená (absence)
         </label>
 
         <label class="row" style="gap: 10px;">
-          <input name="payWithCredit" type="checkbox" />
+          <input name="payWithCredit" type="checkbox" ${checked(lesson?.paymentMethod === "credit")} />
           Zaplatit kredity
         </label>
-  
+
+        ${
+          isEdit && lesson.paymentMethod !== "credit" && lesson.invoiced
+            ? `<div class="muted">Hodina je už vyfakturovaná – úprava nezmění už odeslanou fakturu.</div>`
+            : ""
+        }
+
         <div class="danger" id="lessonErr" style="display:none;"></div>
   
         <div class="row" style="justify-content: flex-end; margin-top: 6px;">
@@ -926,7 +1032,9 @@ async function renderMain() {
 
         if (payWithCredit) {
           const currentBalance = await getStudentCreditBalance(studentId);
-          const nextBalance = currentBalance - durationHours;
+          // při úpravě kreditní hodiny se její dosavadní odečtení vrací
+          const returned = lesson?.paymentMethod === "credit" ? Number(lesson.durationHours) : 0;
+          const nextBalance = currentBalance + returned - durationHours;
 
           if (nextBalance < 0) {
             const ok = confirm(
@@ -940,12 +1048,18 @@ async function renderMain() {
           }
         }
 
-        await addLessonForStudent(studentId, {
+        const values = {
           date: fd.get("date"),
           durationHours: fd.get("durationHours"),
           paidNoShow: fd.get("paidNoShow") === "on",
-          paymentMethod: fd.get("payWithCredit") === "on" ? "credit" : "invoice",
-        });
+          paymentMethod: payWithCredit ? "credit" : "invoice",
+        };
+
+        if (isEdit) {
+          await updateLesson(lesson.id, { ...values, hourlyRate: fd.get("hourlyRate") });
+        } else {
+          await addLessonForStudent(studentId, values);
+        }
         els.dlgLesson.close();
         await refreshSelectedStudent();
       } catch (ex) {
@@ -1035,19 +1149,24 @@ async function renderMain() {
     renderSidebar();
   });
 
-  els.btnExport.addEventListener("click", async () => {
-  const data = await exportData();
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
+  async function exportBackup() {
+    const data = await exportData();
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
 
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `tutorlog-backup-${new Date().toISOString().slice(0,10)}.json`;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-  });
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `tutorlog-backup-${todayLocalISODate()}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+
+    rememberExport();
+    renderBackupNotice();
+  }
+
+  els.btnExport.addEventListener("click", exportBackup);
 
   els.btnImport.addEventListener("click", () => {
   els.importFile.value = "";
@@ -1078,7 +1197,19 @@ async function renderMain() {
 
 
   // init
+  // Požádat prohlížeč, ať data nemaže při nedostatku místa (bez toho je může tiše vyklidit).
+  async function requestPersistentStorage() {
+    try {
+      if (navigator.storage?.persist && !(await navigator.storage.persisted())) {
+        await navigator.storage.persist();
+      }
+    } catch {
+      // nepodporováno – nic se neděje, zálohy jsou pojistka
+    }
+  }
+
   (async function init() {
+    requestPersistentStorage();
     await refreshStudents();
     if (!state.students.length) renderMainEmpty();
   })();

@@ -103,6 +103,17 @@ export async function lessons_setInvoicedMany(states) {
   return txDone(t);
 }
 
+// Saves an edited lesson together with the changes to its credit transactions, atomically.
+export async function lessons_putWithCreditChanges(lesson, { putTxns = [], deleteTxnIds = [] } = {}) {
+  const db = await getDb();
+  const t = db.transaction(["lessons", "creditTransactions"], "readwrite");
+  t.objectStore("lessons").put(lesson);
+  const credits = t.objectStore("creditTransactions");
+  for (const txn of putTxns) credits.put(txn);
+  for (const id of deleteTxnIds) credits.delete(id);
+  return txDone(t);
+}
+
 // Deletes a lesson and any credit transaction tied to it (its deduction), atomically.
 export async function lessons_deleteWithCreditTxns(lessonId) {
   const db = await getDb();
@@ -137,10 +148,11 @@ export async function creditTransactions_listByStudent(studentId) {
   });
 }
 
-// ---------- Backup ----------
+// ---------- Whole database ----------
 const ALL_STORES = ["students", "lessons", "creditTransactions"];
 
-export async function exportAll() {
+// Consistent snapshot of everything (backup export, per-student summaries).
+export async function readAll() {
   const db = await getDb();
   const t = db.transaction(ALL_STORES, "readonly");
   const reqs = ALL_STORES.map((name) => t.objectStore(name).getAll());

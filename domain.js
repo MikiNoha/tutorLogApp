@@ -48,6 +48,11 @@ export function getLessonAmountCzk(lesson) {
   return Number(lesson.durationHours || 0) * rate;
 }
 
+// Účtovaná fakturační hodina (kreditní se nikdy neúčtují – zaplatily se dobitím).
+export function isChargedLesson(lesson) {
+  return lesson.paymentMethod !== "credit" && lesson.billable;
+}
+
 // Skutečně zaplacená částka za dobití (balíček může být se slevou).
 export function getTopupAmountCzk(txn) {
   return txn.amountCzk ?? Number(txn.hours || 0) * DEFAULT_HOURLY_RATE;
@@ -201,6 +206,68 @@ export async function setLessonBillable(lessonId, billable) {
   return updated;
 }
 
+// Oprava zapsané hodiny. Při změně platby nebo délky kreditní hodiny se
+// odpovídajícím způsobem upraví i odečtení kreditu (zachová původní datum).
+export async function updateLesson(lessonId, form) {
+  const current = await repo.lessons_get(lessonId);
+  assert(current, "Hodina nenalezena");
+
+  const date = form?.date ?? current.date;
+  const durationHours = toNumber(form?.durationHours ?? current.durationHours);
+  assert(date && /^\d{4}-\d{2}-\d{2}$/.test(date), "date musí být YYYY-MM-DD");
+  assert(Number.isFinite(durationHours) && durationHours > 0, "durationHours musí být > 0");
+
+  const hourlyRate =
+    form?.hourlyRate !== undefined ? parseHourlyRate(form.hourlyRate) : current.hourlyRate;
+
+  const paymentMethod = form?.paymentMethod ?? current.paymentMethod ?? "invoice";
+  assert(
+    paymentMethod === "invoice" || paymentMethod === "credit",
+    "Neplatná platební metoda"
+  );
+  const paidNoShow = form?.paidNoShow ?? !current.occurred;
+
+  let { billable, invoiced } = current;
+  if (paymentMethod === "credit") {
+    billable = false;
+    invoiced = true;
+  } else if (current.paymentMethod === "credit") {
+    // z kreditu na fakturu: nová účtovaná, zatím nevyfakturovaná hodina
+    billable = true;
+    invoiced = false;
+  }
+
+  const updated = {
+    ...current,
+    date,
+    durationHours,
+    hourlyRate,
+    occurred: !paidNoShow,
+    billable,
+    invoiced,
+    paymentMethod,
+  };
+
+  const txns = await repo.creditTransactions_listByStudent(current.studentId);
+  const deductions = txns.filter(t => t.relatedLessonId === lessonId);
+  const changes = { putTxns: [], deleteTxnIds: [] };
+
+  if (paymentMethod === "credit") {
+    const [keep, ...extra] = deductions;
+    changes.putTxns.push(
+      keep
+        ? { ...keep, hours: -durationHours }
+        : buildCreditTxn(current.studentId, "lesson_deduction", -durationHours, "", lessonId)
+    );
+    changes.deleteTxnIds.push(...extra.map(t => t.id));
+  } else {
+    changes.deleteTxnIds.push(...deductions.map(t => t.id));
+  }
+
+  await repo.lessons_putWithCreditChanges(updated, changes);
+  return updated;
+}
+
 export async function deleteLesson(lessonId) {
   assert(lessonId, "lessonId je povinné");
   // smaže i odečtení kreditu navázané na hodinu → kredit se vrátí
@@ -243,7 +310,7 @@ export async function undoBulkInvoiceMonth(undo) {
 const SCHEMA_VERSION = 2; // v2: + creditTransactions
 
 export async function exportData() {
-  const { students, lessons, creditTransactions } = await repo.exportAll();
+  const { students, lessons, creditTransactions } = await repo.readAll();
   return {
     schemaVersion: SCHEMA_VERSION,
     exportedAt: nowIso(),
@@ -318,6 +385,34 @@ export async function listCreditTransactionsByStudent(studentId) {
 export async function getStudentCreditBalance(studentId) {
   const txns = await repo.creditTransactions_listByStudent(studentId);
   return txns.reduce((sum, t) => sum + Number(t.hours || 0), 0);
+}
+
+// Kredit na jednu hodinu a méně = dochází.
+export const LOW_CREDIT_HOURS = 1;
+
+// Krátký stav každého studenta pro sidebar: kredit a hodiny k fakturaci.
+// Vrací Map(studentId -> { creditBalance, usesCredit, notInvoicedHours }).
+export async function getStudentSummaries() {
+  const { lessons, creditTransactions } = await repo.readAll();
+  const summaries = new Map();
+  const of = (studentId) => {
+    if (!summaries.has(studentId)) {
+      summaries.set(studentId, { creditBalance: 0, usesCredit: false, notInvoicedHours: 0 });
+    }
+    return summaries.get(studentId);
+  };
+
+  for (const t of creditTransactions) {
+    const s = of(t.studentId);
+    s.creditBalance += Number(t.hours || 0);
+    s.usesCredit = true;
+  }
+  for (const l of lessons) {
+    if (isChargedLesson(l) && !l.invoiced) {
+      of(l.studentId).notInvoicedHours += Number(l.durationHours || 0);
+    }
+  }
+  return summaries;
 }
 
 export async function resetStudentCredit(studentId, note = "VYNULOVÁNÍ") {
